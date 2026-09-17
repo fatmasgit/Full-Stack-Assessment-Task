@@ -265,3 +265,5 @@ parsing.
 
 Components are server components by default; `"use client"` is added only where
 interactivity or hooks require it.
+#   F u l l - S t a c k - A s s e s s m e n t - T a s k  
+ 
