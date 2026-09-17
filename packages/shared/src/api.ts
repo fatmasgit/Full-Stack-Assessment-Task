@@ -50,6 +50,7 @@ export interface TaskSummary {
   priority: TaskPriority;
   commentCount: number;
   createdBy: UserSummary;
+  assignee: UserSummary | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -82,6 +83,11 @@ export interface Paginated<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface PaginatedWithMeta<T> extends Paginated<T> {
+  pages: number;
+  hasMore: boolean;
 }
 
 /** Shape produced by the API's exception filter for every non-2xx response. */

@@ -50,3 +50,10 @@ export function updateTask(
     body: payload,
   });
 }
+
+export function updateTaskAssignee(taskId: string, assigneeId: string | null): Promise<TaskDetail> {
+  return apiRequest<TaskDetail>(`/tasks/${taskId}/assignee`, {
+    method: 'PATCH',
+    body: { assigneeId },
+  });
+}

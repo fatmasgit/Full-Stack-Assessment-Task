@@ -8,6 +8,7 @@ import {
   type CreateTaskPayload,
   fetchProjectTasks,
   fetchTask,
+  updateTaskAssignee,
   updateTaskStatus,
 } from './api';
 
@@ -34,8 +35,12 @@ export function useCreateTask(projectId: string) {
     mutationFn: (payload) => createTask(projectId, payload),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTasks(projectId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.projectTasks(projectId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.projects,
+        }),
       ]);
     },
   });
@@ -48,7 +53,30 @@ export function useUpdateTaskStatus(taskId: string, projectId: string) {
     mutationFn: (status) => updateTaskStatus(taskId, status),
     onSuccess: async (task) => {
       queryClient.setQueryData(queryKeys.task(taskId), task);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.projectTasks(projectId) });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.projectTasks(projectId),
+      });
+    },
+  });
+}
+
+export function useUpdateTaskAssignee(taskId: string, projectId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<TaskDetail, Error, string | null>({
+    mutationFn: (assigneeId) => updateTaskAssignee(taskId, assigneeId),
+
+    onSuccess: async (task) => {
+      queryClient.setQueryData(queryKeys.task(taskId), task);
+
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.projectTasks(projectId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['task-activities', taskId],
+        }),
+      ]);
     },
   });
 }

@@ -43,6 +43,7 @@ describe('Tasks', () => {
       'acme-software',
       owner.id,
     );
+
     await addOrganizationMember(connection, organizationId, owner.id, OrganizationRole.OWNER);
     await addOrganizationMember(connection, organizationId, member.id, OrganizationRole.MEMBER);
 
@@ -53,6 +54,7 @@ describe('Tasks', () => {
       'ENG',
       owner.id,
     );
+
     await addProjectMember(connection, projectId, member.id, ProjectRole.MEMBER);
   });
 
@@ -74,7 +76,10 @@ describe('Tasks', () => {
       status: TaskStatus.TODO,
       priority: TaskPriority.HIGH,
     });
-    expect(response.body.createdBy).toMatchObject({ email: 'magd@example.com' });
+
+    expect(response.body.createdBy).toMatchObject({
+      email: 'magd@example.com',
+    });
   });
 
   it('numbers tasks sequentially within a project', async () => {
@@ -92,6 +97,7 @@ describe('Tasks', () => {
       .expect(200);
 
     expect(response.body.total).toBe(3);
+
     expect(response.body.items.map((task: { key: string }) => task.key)).toEqual([
       'ENG-1',
       'ENG-2',
@@ -128,13 +134,18 @@ describe('Tasks', () => {
     await request(app.getHttpServer())
       .post(`/projects/${projectId}/tasks`)
       .set('Authorization', authHeader(member))
-      .send({ title: 'Work in flight', status: TaskStatus.IN_PROGRESS })
+      .send({
+        title: 'Work in flight',
+        status: TaskStatus.IN_PROGRESS,
+      })
       .expect(201);
 
     await request(app.getHttpServer())
       .post(`/projects/${projectId}/tasks`)
       .set('Authorization', authHeader(member))
-      .send({ title: 'Not started yet' })
+      .send({
+        title: 'Not started yet',
+      })
       .expect(201);
 
     const response = await request(app.getHttpServer())
@@ -144,6 +155,36 @@ describe('Tasks', () => {
       .expect(200);
 
     expect(response.body.total).toBe(1);
-    expect(response.body.items[0]).toMatchObject({ title: 'Work in flight' });
+    expect(response.body.items[0]).toMatchObject({
+      title: 'Work in flight',
+    });
+  });
+
+  it('prevents someone outside the project from changing task status', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/tasks`)
+      .set('Authorization', authHeader(member))
+      .send({
+        title: 'Protected task',
+        status: TaskStatus.TODO,
+      })
+      .expect(201);
+
+    const taskId = createResponse.body.id;
+
+    await request(app.getHttpServer())
+      .patch(`/tasks/${taskId}/status`)
+      .set('Authorization', authHeader(outsider))
+      .send({
+        status: TaskStatus.DONE,
+      })
+      .expect(403);
+
+    const response = await request(app.getHttpServer())
+      .get(`/tasks/${taskId}`)
+      .set('Authorization', authHeader(member))
+      .expect(200);
+
+    expect(response.body.status).toBe(TaskStatus.TODO);
   });
 });

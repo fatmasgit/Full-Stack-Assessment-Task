@@ -27,14 +27,27 @@ export class Task {
   @Prop({ type: String, default: null })
   description?: string | null;
 
-  @Prop({ type: String, enum: TASK_STATUSES, required: true, default: TaskStatus.TODO })
+  @Prop({
+    type: String,
+    enum: TASK_STATUSES,
+    required: true,
+    default: TaskStatus.TODO,
+  })
   status: TaskStatus;
 
-  @Prop({ type: String, enum: TASK_PRIORITIES, required: true, default: TaskPriority.MEDIUM })
+  @Prop({
+    type: String,
+    enum: TASK_PRIORITIES,
+    required: true,
+    default: TaskPriority.MEDIUM,
+  })
   priority: TaskPriority;
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  assignee?: Types.ObjectId | null;
 
   createdAt: Date;
   updatedAt: Date;
@@ -43,5 +56,7 @@ export class Task {
 export const TaskSchema = SchemaFactory.createForClass(Task);
 
 TaskSchema.index({ projectId: 1, status: 1 });
-TaskSchema.index({ projectId: 1, number: 1 });
+
+TaskSchema.index({ projectId: 1, number: 1 }, { unique: true });
+
 TaskSchema.index({ createdAt: -1 });

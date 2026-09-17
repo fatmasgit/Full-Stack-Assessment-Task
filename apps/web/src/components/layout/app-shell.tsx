@@ -22,6 +22,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { data: user, isPending, isError } = useCurrentUser();
   const { data: projects, isPending: isLoadingProjects } = useProjects();
 
+
   useEffect(() => {
     if (isError || (!isPending && !user) || (typeof window !== 'undefined' && !getAccessToken())) {
       router.replace('/login');

@@ -2,11 +2,18 @@
 
 import { ArrowLeftIcon } from '@phosphor-icons/react/dist/ssr';
 import Link from 'next/link';
+import { ActivityView } from '@/features/activities/components/activity-view';
 import { Avatar } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CommentList } from '@/features/comments/components/comment-list';
+import {
+  useProjectMembers,
+  useProjects,
+} from '@/features/projects/hooks';
+import { useCurrentUser } from '@/features/auth/hooks';
 import { formatDate } from '@/lib/format';
 import { useTask } from '../hooks';
+import { TaskAssigneeSelect } from './task-assignee-select';
 import { TaskPriorityBadge } from './task-priority-badge';
 import { TaskStatusSelect } from './task-status-select';
 
@@ -17,8 +24,11 @@ interface TaskViewProps {
 
 export function TaskView({ projectId, taskId }: TaskViewProps) {
   const { data: task, isPending, isError, error } = useTask(taskId);
+  const { data: members } = useProjectMembers(projectId);
+  const { data: user } = useCurrentUser();
+  const { data: projects } = useProjects();
 
-  if (isPending) {
+  if (isPending || !user) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-6 w-40" />
@@ -36,6 +46,23 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
     );
   }
 
+  const currentMember = members?.find(
+    (member) => member.user.id === user.id,
+  );
+
+  const project = projects?.find(
+    (project) => project.id === projectId,
+  );
+
+  const organization = user.organizations.find(
+    (organization) => organization.id === project?.organizationId,
+  );
+
+  const canManage =
+    currentMember?.role === 'PROJECT_MANAGER' ||
+    organization?.role === 'OWNER' ||
+    organization?.role === 'ADMIN';
+
   return (
     <div className="space-y-6">
       <Link
@@ -49,14 +76,20 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_240px]">
         <div className="min-w-0 space-y-6">
           <div className="space-y-2">
-            <p className="font-mono text-[12px] text-muted-foreground">{task.key}</p>
+            <p className="font-mono text-[12px] text-muted-foreground">
+              {task.key}
+            </p>
+
             <h1 className="text-xl font-semibold leading-snug tracking-tight text-foreground">
               {task.title}
             </h1>
           </div>
 
           <section aria-label="Description">
-            <h2 className="mb-2 text-sm font-semibold text-foreground">Description</h2>
+            <h2 className="mb-2 text-sm font-semibold text-foreground">
+              Description
+            </h2>
+
             {task.description ? (
               <p className="whitespace-pre-wrap text-[13px] leading-6 text-muted-foreground">
                 {task.description}
@@ -69,6 +102,8 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
           </section>
 
           <CommentList taskId={taskId} />
+
+          <ActivityView taskId={taskId} />
         </div>
 
         <aside className="space-y-5 lg:border-l lg:border-border lg:pl-6">
@@ -76,23 +111,48 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
             <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Status
             </h2>
-            <TaskStatusSelect taskId={task.id} projectId={projectId} status={task.status} />
+
+            <TaskStatusSelect
+              taskId={task.id}
+              projectId={projectId}
+              status={task.status}
+            />
           </div>
 
           <div className="space-y-1.5">
             <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Priority
             </h2>
+
             <TaskPriorityBadge priority={task.priority} />
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              Assignee
+            </h2>
+
+            <TaskAssigneeSelect
+              taskId={task.id}
+              projectId={projectId}
+              assigneeId={task.assignee?.id ?? null}
+              members={members ?? []}
+              currentUserId={user.id}
+              canManage={canManage}
+            />
           </div>
 
           <div className="space-y-1.5">
             <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Created by
             </h2>
+
             <div className="flex items-center gap-2">
               <Avatar user={task.createdBy} size="sm" />
-              <span className="truncate text-[13px] text-foreground">{task.createdBy.name}</span>
+
+              <span className="truncate text-[13px] text-foreground">
+                {task.createdBy.name}
+              </span>
             </div>
           </div>
 
@@ -100,7 +160,10 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
             <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Created
             </h2>
-            <p className="text-[13px] text-muted-foreground">{formatDate(task.createdAt)}</p>
+
+            <p className="text-[13px] text-muted-foreground">
+              {formatDate(task.createdAt)}
+            </p>
           </div>
         </aside>
       </div>
