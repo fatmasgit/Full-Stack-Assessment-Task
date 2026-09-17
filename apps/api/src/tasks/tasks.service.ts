@@ -77,11 +77,6 @@ export class TasksService {
   ): Promise<TaskDetail> {
     const { project } = await this.projectAccessService.assertCanView(projectId, userId);
 
-    /*
-     * If this project does not have a counter yet, initialize it from
-     * the highest existing task number. This prevents an existing project
-     * with ENG-1, ENG-2, ENG-3 from creating ENG-1 again.
-     */
     let counter = await this.taskCounterModel.findOne({ projectId }).exec();
 
     if (!counter) {
@@ -91,10 +86,22 @@ export class TasksService {
         .select({ number: 1 })
         .exec();
 
-      counter = await this.taskCounterModel.create({
-        projectId,
-        sequence: lastTask?.number ?? 0,
-      });
+      try {
+        counter = await this.taskCounterModel.create({
+          projectId,
+          sequence: lastTask?.number ?? 0,
+        });
+      } catch (error) {
+        if ((error as { code?: number }).code !== 11000) {
+          throw error;
+        }
+
+        counter = await this.taskCounterModel.findOne({ projectId }).exec();
+
+        if (!counter) {
+          throw new Error('Failed to initialize task counter');
+        }
+      }
     }
 
     const updatedCounter = await this.taskCounterModel
@@ -127,7 +134,6 @@ export class TasksService {
 
     return this.toDetail(task, project);
   }
-
   async findOne(taskId: Types.ObjectId, userId: Types.ObjectId): Promise<TaskDetail> {
     const task = await this.findTaskOrFail(taskId);
 

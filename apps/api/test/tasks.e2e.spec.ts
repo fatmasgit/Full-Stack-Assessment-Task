@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Connection } from 'mongoose';
 import request from 'supertest';
 import { OrganizationRole, ProjectRole, TaskPriority, TaskStatus } from '@projectflow/shared';
+
 import { createTestApp, resetDatabase } from './utils/test-app';
 import {
   addOrganizationMember,
@@ -19,6 +20,7 @@ describe('Tasks', () => {
 
   let owner: TestUser;
   let member: TestUser;
+  let secondMember: TestUser;
   let outsider: TestUser;
   let projectId: string;
 
@@ -35,6 +37,7 @@ describe('Tasks', () => {
 
     owner = await registerUser(app, 'Ammar Yaser', 'ammar@example.com');
     member = await registerUser(app, 'Magd Ali', 'magd@example.com');
+    secondMember = await registerUser(app, 'Ahmed Hassan', 'ahmed@example.com');
     outsider = await registerUser(app, 'Outside User', 'outside@example.com');
 
     const organizationId = await createOrganization(
@@ -45,7 +48,15 @@ describe('Tasks', () => {
     );
 
     await addOrganizationMember(connection, organizationId, owner.id, OrganizationRole.OWNER);
+
     await addOrganizationMember(connection, organizationId, member.id, OrganizationRole.MEMBER);
+
+    await addOrganizationMember(
+      connection,
+      organizationId,
+      secondMember.id,
+      OrganizationRole.MEMBER,
+    );
 
     projectId = await createProject(
       connection,
@@ -56,6 +67,8 @@ describe('Tasks', () => {
     );
 
     await addProjectMember(connection, projectId, member.id, ProjectRole.MEMBER);
+
+    await addProjectMember(connection, projectId, secondMember.id, ProjectRole.MEMBER);
   });
 
   it('lets a project member create a task', async () => {
@@ -160,6 +173,103 @@ describe('Tasks', () => {
     });
   });
 
+  it('lets a project member assign themselves', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/tasks`)
+      .set('Authorization', authHeader(member))
+      .send({ title: 'Self assign task' })
+      .expect(201);
+
+    const response = await request(app.getHttpServer())
+      .patch(`/tasks/${createResponse.body.id}/assignee`)
+      .set('Authorization', authHeader(member))
+      .send({
+        assigneeId: member.id,
+      })
+      .expect(200);
+
+    expect(response.body.assignee).toMatchObject({
+      id: member.id,
+      email: 'magd@example.com',
+    });
+  });
+
+  it('lets an authorized project role assign another project member', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/tasks`)
+      .set('Authorization', authHeader(member))
+      .send({ title: 'Assign another member' })
+      .expect(201);
+
+    const response = await request(app.getHttpServer())
+      .patch(`/tasks/${createResponse.body.id}/assignee`)
+      .set('Authorization', authHeader(owner))
+      .send({
+        assigneeId: member.id,
+      })
+      .expect(200);
+
+    expect(response.body.assignee.id).toBe(member.id);
+  });
+
+  it('prevents a regular member from assigning another user', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/tasks`)
+      .set('Authorization', authHeader(member))
+      .send({ title: 'Protected assignment' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/tasks/${createResponse.body.id}/assignee`)
+      .set('Authorization', authHeader(member))
+      .send({
+        assigneeId: secondMember.id,
+      })
+      .expect(403);
+  });
+
+  it('prevents assigning someone outside the project', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/tasks`)
+      .set('Authorization', authHeader(member))
+      .send({ title: 'Outside assignment' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/tasks/${createResponse.body.id}/assignee`)
+      .set('Authorization', authHeader(owner))
+      .send({
+        assigneeId: outsider.id,
+      })
+      .expect(403);
+  });
+
+  it('allows the current assignee to unassign themselves', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/tasks`)
+      .set('Authorization', authHeader(member))
+      .send({ title: 'Unassign task' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/tasks/${createResponse.body.id}/assignee`)
+      .set('Authorization', authHeader(member))
+      .send({
+        assigneeId: member.id,
+      })
+      .expect(200);
+
+    const response = await request(app.getHttpServer())
+      .patch(`/tasks/${createResponse.body.id}/assignee`)
+      .set('Authorization', authHeader(member))
+      .send({
+        assigneeId: null,
+      })
+      .expect(200);
+
+    expect(response.body.assignee).toBeNull();
+  });
+
   it('prevents someone outside the project from changing task status', async () => {
     const createResponse = await request(app.getHttpServer())
       .post(`/projects/${projectId}/tasks`)
@@ -186,5 +296,26 @@ describe('Tasks', () => {
       .expect(200);
 
     expect(response.body.status).toBe(TaskStatus.TODO);
+  });
+
+  it('creates unique task identifiers when tasks are created concurrently', async () => {
+    const requests = Array.from({ length: 10 }, (_, index) =>
+      request(app.getHttpServer())
+        .post(`/projects/${projectId}/tasks`)
+        .set('Authorization', authHeader(member))
+        .send({
+          title: `Concurrent task ${index + 1}`,
+        }),
+    );
+
+    const responses = await Promise.all(requests);
+
+    responses.forEach((response) => {
+      expect(response.status).toBe(201);
+    });
+
+    const keys = responses.map((response) => response.body.key);
+
+    expect(new Set(keys).size).toBe(10);
   });
 });
