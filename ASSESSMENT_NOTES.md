@@ -2,10 +2,6 @@
 
 ## Architecture
 
-*Scope note: the only source file I was given is `tasks.service.ts`. There's no controller,
-schema, guard, or frontend code in front of me, so several answers below are inferences from
-that one file rather than confirmed facts. I've marked which is which.*
-
 **How is the application structured, and what are the major modules?**
 It's a NestJS backend on MongoDB/Mongoose, organized by domain feature modules rather than by
 technical layer. From the imports alone I can see at least: `tasks`, `projects` (with a
