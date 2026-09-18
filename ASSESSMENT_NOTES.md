@@ -1,127 +1,189 @@
 # Assessment Notes
 
----
+## Architecture
 
-## 🏗️ Architecture
+### Application Structure
 
-### Structure & modules
-NestJS + MongoDB/Mongoose, organized by **domain module** (not by technical layer):
-`tasks`, `projects` (+ `project-access`), `project-members`, `users`, `comments`, `activities`,
-plus a `common` module for shared helpers. Each module owns its own schema and talks to other
-domains only through their services — e.g. `TasksService` depends on `ProjectAccessService`,
-`ProjectMembersService`, `UsersService`, `ActivitiesService`, never their raw collections.
-Shared types (`Paginated`, `TaskDetail`, `TaskSummary`) live in a `@projectflow/shared` package,
-pointing to a monorepo where backend and frontend consume the same contracts.
+ProjectFlow is a TypeScript monorepo managed with pnpm workspaces and Turborepo.
 
-### Where business logic lives
-Almost entirely in the **service layer**, not controllers or schemas. `TasksService` owns the
-rules (who can edit what, key generation, when an activity gets logged). Authorization
-*decisions* are centralized in `ProjectAccessService`, which `TasksService` calls into rather
-than reimplementing — good separation. What's *not* centralized: small per-method checks like
-"is this the creator?" are recomputed inline each time instead of living in one policy object.
+The main applications are:
 
-### Frontend ↔ backend
-- **Transport:** REST-style HTTP calls from the frontend to the NestJS API.
-- **Auth:** JWT bearer token, resolved server-side and injected into controllers via a
-  `@CurrentUser('id') userId` decorator — so every service method receives an already-trusted
-  `userId`, never a raw token.
-- **Server state:** the typed `Paginated<TaskSummary>` / `TaskDetail` shapes strongly suggest a
-  query-caching library on the frontend (e.g. **TanStack Query hooks** like `useTasks(projectId)`
-  / `useTask(taskId)`) rather than hand-rolled `fetch` + local state — that's the natural fit for
-  a typed, cache-invalidation-heavy resource like tasks/comments/activities.
-- **Validation:** client-side form validation (Zod-shaped types match the shared package) is a
-  UX nicety only — the DTO layer on the backend is the real boundary.
+* `apps/api` — NestJS backend
+* `apps/web` — Next.js frontend
 
-### Authorization: front vs. back
-| Layer | What it does | Where it lives |
-|---|---|---|
-| **Frontend** | Hides/shows buttons (edit, assign, delete) based on the current user's role, fetched via a hook off the current-user/project-membership query | UI-only — a `usePermissions()`/`useProjectRole()`-style hook feeding conditional rendering |
-| **Backend** | Actually enforces the rule; the only source of truth | `ProjectAccessService.assertCanView()`, `.assertCanManage()`, and the `canManage(access)` helper, called from every `TasksService` method |
+Shared types and constants are kept in `packages/shared`.
 
-The frontend check is a convenience — it can be bypassed by calling the API directly, so nothing
-it does is trusted. All real enforcement happens in the functions above, every time.
+The backend is organized into NestJS modules such as:
 
-### How the main entities relate
-```
-Project ──1:N── Task ──1:N── Comment
-   │               │
-   │               ├── createdBy ──→ User   (who made it — never changes)
-   │               └── assignee  ──→ User?  (who owns it now — nullable, changes over time)
-   │               └── 1:N ──→ Activity     (audit trail, e.g. assignee changes)
-   │
-   └──1:1── TaskCounter   (per-project atomic sequence → generates key like PROJ-42)
-   └──1:N── ProjectMember ──→ User   (role per user per project)
-```
-Users are never embedded — every reference (`createdBy`, `assignee`, activity actor) is an
-ObjectId, hydrated in bulk on read via `UsersService.findManyByIds`.
+* Authentication
+* Users
+* Organizations
+* Organization Members
+* Projects
+* Project Members
+* Tasks
+* Comments
+* Activities
 
----
+The frontend uses Next.js App Router with React and TanStack Query for server state management.
 
-## ⚠️ Observations
+### Where Business Logic Lives
 
-| # | What I noticed | Why it's a problem | Fix now or later? |
-|---|---|---|---|
-| **1** | `updateStatus()` requires `assertCanManage` (managers only). But the generic `update()` also accepts `dto.status`, guarded only by `canManage OR isCreator`. | A non-manager **creator can change status through the wrong endpoint**, silently bypassing the stricter rule `updateStatus` exists to enforce. | **Now** — one-line fix (drop `status` from `update()`, or require `assertCanManage` there too). |
-| **2** | `remove()` deletes the task and its comments via `Promise.all`, with no transaction. | Partial failure leaves orphaned comments or a "deleted" task whose comments survive. `updateAssignee` already shows the correct pattern (session + `withTransaction`). | **Soon** — small, mechanical change; low frequency but real data-integrity risk. |
-| **3** | `create()` does check-then-act on `TaskCounter`, catching a duplicate-key error as recovery. | Only safe *if* `TaskCounter.projectId` has a unique index. *(Confirmed: it does — `@Prop({ unique: true })`. `Task` also has a unique `{projectId, number}` index as a second layer.)* Remaining gap: `taskModel.create()` itself has no matching try/catch for that second layer. | **Later** — low-probability edge case now that both indexes are confirmed; a small consistency fix, not a live bug. |
-| **4** | `update()`, `updateStatus()`, `updateAssignee()` all load → mutate → save with no version check. *(Confirmed: `@Schema()` doesn't set `optimisticConcurrency`.)* | Two users editing the same task around the same time → last write silently wins, no conflict surfaced. Plausible "my edit disappeared" reports in a collaborative tool. | **Later** — UX/polish, not correctness or security; needs real evidence of collisions to prioritize. |
+Most business logic lives in the backend service layer.
 
----
+Controllers are responsible mainly for receiving HTTP requests, validating/parsing input, getting the current user, and calling the appropriate service method.
 
-## 🔍 Code Review — `assignTask`
+For example, `TasksController` receives the task request and calls methods such as:
+
+* `tasksService.create()`
+* `tasksService.update()`
+* `tasksService.updateAssignee()`
+* `tasksService.updateStatus()`
+* `tasksService.remove()`
+
+The business rules are then handled inside `TasksService`.
+
+Database access is handled through Mongoose models.
+
+### Frontend and Backend Communication
+
+The Next.js frontend communicates with the NestJS API through HTTP requests.
+
+Authentication uses a JWT bearer token, which is sent with authenticated API requests.
+
+TanStack Query is used on the frontend to manage server state, including fetching, caching, updating, and invalidating task and activity data.
+
+React Hook Form and Zod are used for form handling and client-side validation.
+
+Backend DTO validation provides the final validation boundary before business logic is executed.
+
+## Authentication and Authorization
+
+### Authentication
+
+Authentication is implemented using JWT bearer tokens.
+
+The authenticated user is made available to controllers through the `CurrentUser` decorator.
+
+For example, task endpoints use:
 
 ```ts
-async assignTask(taskId: string, assigneeId: string, userId: string) {
-  const task = await this.taskModel.findById(taskId);
-  if (!task) { throw new NotFoundException(); }
-  const user = await this.userModel.findById(assigneeId);
-  if (!user) { throw new NotFoundException(); }
-  task.assignee = user._id;
-  await task.save();
-  return task;
-}
+@CurrentUser('id') userId: string
 ```
 
-Reviewed against the existing `updateAssignee()`, which already does this correctly. **Would not
-approve as-is.**
+The controller converts the user ID to an ObjectId before passing it to the service.
 
-**🚫 Blocker**
-- **No authorization at all.** `userId` is accepted but never used — any user can reassign any
-  task in any project to anyone. Fix: call `assertCanView`, gate manager-only behavior behind
-  `canManage(access)`, same as `updateAssignee`.
+### Backend Authorization
 
-**Business rules missing**
-- **No project-membership check** on the assignee — could assign to someone with no access to
-  the project at all.
-- **No unassign support** — `assigneeId: null` (a valid case elsewhere) isn't handled.
+Authorization is mainly handled on the backend through `ProjectAccessService`.
 
-**Data integrity**
-- **No activity log, no transaction** — the change is silent and, if logging is bolted on later
-  without a transaction, could desync task state from its audit trail.
-- **No idempotency check** — reassigning to the same person still writes and would log a
-  spurious activity.
+The important functions include:
 
-**Correctness & robustness**
-- **Unvalidated string IDs** — a malformed ObjectId throws an uncaught `CastError` → raw 500
-  instead of a clean 400.
-- **Empty exceptions** — `NotFoundException()` doesn't say what wasn't found.
+* `assertCanView()` — verifies that the user can access the project.
+* `assertCanManage()` — verifies that the user has permission to manage the project.
+* `canManage()` — determines whether the resolved project access allows management operations.
 
-**Style / architecture**
-- **Leaky return value** — returns the raw Mongoose document instead of a serialized
-  `TaskDetail`, inconsistent with every other method.
-- **Sequential lookups** — the two `findById` calls are independent and could run via
-  `Promise.all`.
-- **Divergent convention** — positional strings instead of a typed DTO + `ObjectId`, and a
-  parallel implementation of something `updateAssignee` already does correctly.
+Project access is based on organization and project membership.
 
-### What I'd ask the engineer to change
-1. Authorize using `userId` — project access + manager/self-assign rule.
-2. Verify the assignee is a project member.
-3. Support unassigning (`assigneeId: null`).
-4. Wrap the save + activity log in a transaction.
-5. Validate/convert IDs consistently with the rest of the service.
-6. Short-circuit on no-op reassignment.
-7. Return a serialized `TaskDetail`.
-8. Parallelize the two lookups.
-9. Give exceptions descriptive messages.
-10. Reconcile with `updateAssignee` — this shouldn't exist as a second, weaker path.
+Organization owners and admins have access to projects in their organization, while other users need an appropriate project membership.
+
+Task-specific rules are then applied on top of project access.
+
+For example, `TasksService.update()` first checks project access and then checks whether the user is the task creator or has project management permissions.
+
+For assignment, `updateAssignee()` also verifies that the selected assignee is a member of the task's project. This prevents assigning a task to an unrelated user who may exist in the organization.
+
+This separation is important because authentication answers **who the user is**, while authorization determines **what that user is allowed to do**.
+
+### Frontend Authorization
+
+The frontend uses the authenticated user and API responses to control what actions are available in the UI.
+
+For example, the UI can decide whether to show task editing or assignment controls based on the user's available permissions and role.
+
+However, frontend authorization is only a UI-level restriction. The backend remains the source of truth and must perform the actual authorization checks before modifying data.
+
+This is important because a user could bypass frontend restrictions and call the API directly.
+
+## Main Entity Relationships
+
+The main relationships are:
+
+```text
+Organization
+    │
+    ├── OrganizationMember ── User
+    │
+    └── Project
+          │
+          ├── ProjectMember ── User
+          │
+          └── Task
+                │
+                └── Comment
+```
+
+A task belongs to one project and has a `createdBy` user.
+
+A task can also have a nullable `assignee`.
+
+`createdBy` and `assignee` represent different concepts:
+
+* `createdBy` — the user who created the task.
+* `assignee` — the project member currently responsible for the task.
+
+Activities record important changes to tasks, such as assignee changes.
+
+---
+
+## Observations
+
+### 1. Task and Activity Consistency
+
+**What I noticed:** When a task change should create an activity, the task update and activity creation need to happen together.
+
+**Why it could be a problem:** If one operation succeeds and the other fails, the task data and activity history can become inconsistent.
+
+**Decision:** Fix now by using a MongoDB transaction so both operations succeed or fail together.
+
+### 2. Optimistic Concurrency Is Not Enabled
+
+**What I noticed:** The `Task` schema uses `@Schema({ timestamps: true, collection: 'tasks' })` without enabling Mongoose's `optimisticConcurrency` option.
+
+**Why it could be a problem:** If two users update the same task at nearly the same time, both can work with an older version of the task. The later save may overwrite changes made by the first user without detecting that the task was already modified.
+
+**Decision:** Consider enabling optimistic concurrency or using targeted atomic updates to detect or prevent conflicting concurrent task updates.
+
+### 3. Overlapping Task Update Paths
+
+**What I noticed:** There are two ways to update a task. The general `updateTask` endpoint allows the task creator to update fields such as title, description, status, and priority, while dedicated endpoints handle specific features, such as `updateStatus`.
+
+**Why it could be a problem:** This means the same field, such as status, can be changed through different endpoints with different authorization rules depending on who is making the request.
+
+**Decision:** Refactor later by choosing either whole-task updates or dedicated feature updates to keep the business rules consistent.
+
+### 4. Pagination Performance at Scale
+
+**What I noticed:** Task and activity listing use `skip()` and `limit()` for pagination.
+
+**Why it could be a problem:** With very large datasets, high `skip` values can become less efficient.
+
+**Decision:** Keep it for now because the current dataset is small. Consider cursor-based pagination if the data volume grows significantly.
+
+### 5. Delete Flow Is Not Transactional
+
+**What I noticed:** `remove()` deletes the task and its comments in parallel using `Promise.all()` instead of a transaction.
+
+**Why it could be a problem:** If one operation succeeds and the other fails, the task and its related comments can become inconsistent.
+
+**Decision:** Fix later by using a MongoDB transaction for the related deletions.
+
+---
+
+## Code Review
+
+* **Authorization:** `userId` is not used to verify that the current user is allowed to assign the task.
+* **Business rules:** The assignee is not verified as a member of the task's project.
+* **Data consistency:** The assignment operation does not create an activity record for the change.
+* **Transaction safety:** Updating the task and creating the activity should happen in the same transaction so the task and activity history cannot become inconsistent.
+* **Error handling:** `NotFoundException()` is empty and does not clearly explain what was not found.
