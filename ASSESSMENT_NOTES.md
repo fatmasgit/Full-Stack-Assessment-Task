@@ -187,3 +187,33 @@ Activities record important changes to tasks, such as assignee changes.
 * **Data consistency:** The assignment operation does not create an activity record for the change.
 * **Transaction safety:** Updating the task and creating the activity should happen in the same transaction so the task and activity history cannot become inconsistent.
 * **Error handling:** `NotFoundException()` is empty and does not clearly explain what was not found.
+
+### Database Indexes
+
+Activity queries are scoped by `taskId` and ordered by `createdAt`. The current index supports this query pattern. At larger scale, I would profile index usage and adjust indexes based on the queries that are actually used.
+
+### Cursor vs Offset Pagination
+
+The current activity listing uses `skip()` / `limit()`, which is reasonable at the current size. As activity histories become much larger, I would replace this with cursor pagination using `createdAt` and `_id` as a stable cursor, allowing MongoDB to continue from the last activity instead of skipping large numbers of records.
+
+### Query Patterns
+
+The current implementation avoids N+1 queries by loading the related actor, previous assignee, and new assignee users in batches. At larger scale, I would keep this approach and select only the fields needed by the activity response. If profiling shows that these lookups become a bottleneck, I would consider MongoDB `$lookup` or denormalizing the data needed by the activity feed, for example:
+
+```ts
+{
+  actorId,
+  actorName,
+  fromUserId,
+  fromUserName,
+  toUserId,
+  toUserName
+}
+```
+
+This would reduce the need for additional user lookups when reading the activity feed.
+
+### Data Growth and Retention
+
+Activity records are created for task changes and will continuously increase as the system is used. At larger scale, I would define how long detailed activity needs to remain in the main collection and consider removing or moving older records based on the product's retention requirements.
+
