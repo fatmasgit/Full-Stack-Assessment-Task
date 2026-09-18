@@ -189,7 +189,6 @@ Activities record important changes to tasks, such as assignee changes.
 * **Error handling:** `NotFoundException()` is empty and does not clearly explain what was not found.
 
 ---
-
 ## Scaling the Activity System
 
 At the current size, MongoDB with the existing activity collection is sufficient.
@@ -215,6 +214,7 @@ The current implementation avoids N+1 queries by loading the related actor, prev
   toUserId,
   toUserName
 }
+```
 
 ### Asynchronous Processing
 
