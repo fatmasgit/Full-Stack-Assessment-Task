@@ -188,6 +188,12 @@ Activities record important changes to tasks, such as assignee changes.
 * **Transaction safety:** Updating the task and creating the activity should happen in the same transaction so the task and activity history cannot become inconsistent.
 * **Error handling:** `NotFoundException()` is empty and does not clearly explain what was not found.
 
+---
+
+## Scaling the Activity System
+
+At the current size, MongoDB with the existing activity collection is sufficient.
+
 ### Database Indexes
 
 Activity queries are scoped by `taskId` and ordered by `createdAt`. The current index supports this query pattern. At larger scale, I would profile index usage and adjust indexes based on the queries that are actually used.
@@ -209,11 +215,7 @@ The current implementation avoids N+1 queries by loading the related actor, prev
   toUserId,
   toUserName
 }
-```
 
-This would reduce the need for additional user lookups when reading the activity feed.
+### Asynchronous Processing
 
-### Data Growth and Retention
-
-Activity records are created for task changes and will continuously increase as the system is used. At larger scale, I would define how long detailed activity needs to remain in the main collection and consider removing or moving older records based on the product's retention requirements.
-
+The task update and activity creation should remain synchronous because they need to succeed or fail together. Once the assignment is successfully committed, related side effects such as notifying the new assignee could be handled asynchronously, so sending the notification does not delay or affect the task assignment itself.
